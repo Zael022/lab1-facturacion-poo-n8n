@@ -1,0 +1,738 @@
+{
+  "name": "Lab 1 — Central de facturación con días hábiles (POO + n8n)",
+  "nodes": [
+    {
+      "id": "2073efdd-88b9-5203-02e9-51e28e689e4e",
+      "name": "Cada día 7:00 a.m.",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c3794b22-9931-d5bf-e535-64ad5ba24036",
+      "name": "Configuración",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ea19995a-6f3b-7874-1f26-ba28066eef6e",
+              "name": "jsonServer",
+              "value": "http://localhost:3000",
+              "type": "string"
+            },
+            {
+              "id": "9b6d1bb2-7ede-ff3f-4728-61a215d12812",
+              "name": "hoy",
+              "value": "={{ $now.setZone('America/Costa_Rica').toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            },
+            {
+              "id": "2c2bc8e0-42b3-b533-df3a-93c99412c601",
+              "name": "umbralDiasRiesgo",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "868071a8-9b4c-2ab6-20d6-e5692986ca94",
+              "name": "montoCriticoCRC",
+              "value": 1000000,
+              "type": "number"
+            },
+            {
+              "id": "fb740f7e-6966-f090-fa1f-5b583f686e0c",
+              "name": "correoAlertas",
+              "value": "tu-correo@gmail.com",
+              "type": "string"
+            },
+            {
+              "id": "a102d5e6-536a-85d6-fbe7-4c9708afa8b1",
+              "name": "correoRemitente",
+              "value": "tu-correo@gmail.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2a9e6837-36c7-fa9c-02c3-012da3ae815c",
+      "name": "API Feriados (Nager.Date)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        180
+      ],
+      "parameters": {
+        "url": "=https://date.nager.at/api/v3/PublicHolidays/{{ $('Configuración').first().json.hoy.slice(0, 4) }}/CR",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "48166f7d-8c03-2ad0-a3b6-33f14a335252",
+      "name": "API Tipo de cambio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        420
+      ],
+      "parameters": {
+        "url": "https://open.er-api.com/v6/latest/USD",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "48273d3c-5ef3-4660-92f1-3024406a418e",
+      "name": "Preparar feriados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        180
+      ],
+      "parameters": {
+        "jsCode": "// Revisa la respuesta de Nager.Date y la deja en un formato simple.\n// Si la API falló, n8n deja un campo \"error\" (el nodo HTTP continúa en vez de detenerse).\nconst r = $input.first().json;\nconst ok = r.statusCode === 200 && Array.isArray(r.body) && r.body.length > 0;\nlet errorFeriados = null;\nif (!ok) {\n  errorFeriados = r.error\n    ? (r.error.message || String(r.error))\n    : `Respuesta inesperada de la API (estado HTTP ${r.statusCode})`;\n}\nreturn [{\n  json: {\n    feriadosOk: ok,\n    feriados: ok ? r.body.map((f) => ({ date: f.date, localName: f.localName })) : [],\n    errorFeriados,\n  },\n}];"
+      }
+    },
+    {
+      "id": "709012ee-d49f-f5d2-5787-438c1c5be789",
+      "name": "Preparar tipo de cambio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// Revisa la respuesta de open.er-api.com y extrae el tipo de cambio USD -> CRC.\n// Si la API falla NO se detiene el workflow: el ProcesadorFacturas usará el último del historial.\nconst r = $input.first().json;\nconst b = r.body || {};\nconst ok = r.statusCode === 200 && b.result === 'success' && b.rates && b.rates.CRC > 0;\nreturn [{\n  json: {\n    tipoCambioOk: Boolean(ok),\n    tipoCambio: ok ? Math.round(b.rates.CRC * 100) / 100 : null,\n    errorTipoCambio: ok ? null : (r.error ? (r.error.message || String(r.error)) : 'Respuesta inesperada de la API'),\n  },\n}];"
+      }
+    },
+    {
+      "id": "5d612a9c-f589-b3f3-7c82-d2b5452f22c9",
+      "name": "Combinar fuentes externas",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      }
+    },
+    {
+      "id": "3b3814e0-f96e-e526-7fd6-37ae2b7e9a7d",
+      "name": "¿Hay feriados?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2c1d7889-b1a6-2272-a13c-0d637c1619cc",
+              "leftValue": "={{ $json.feriadosOk }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b5d6e8a3-4b9c-9637-eaae-cbb5471d52cc",
+      "name": "GET facturas no pagadas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        200
+      ],
+      "parameters": {
+        "url": "={{ $('Configuración').first().json.jsonServer }}/facturas?estado_ne=pagada",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "0245cac6-2c85-c387-dd76-e49eeb1b7d43",
+      "name": "Alerta: API de feriados caída",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        520
+      ],
+      "parameters": {
+        "jsCode": "// ERROR 1: la API de feriados no respondió. Por seguridad no se procesa nada.\nconst config = $('Configuración').first().json;\nconst fuentes = $input.first().json;\nreturn [{\n  json: {\n    asunto: `⚠ Facturación detenida ${config.hoy}: la API de feriados no respondió`,\n    cuerpo: [\n      `No se procesó ninguna factura el ${config.hoy}.`,\n      '',\n      `Motivo técnico: ${fuentes.errorFeriados}`,\n      '',\n      'Regla de seguridad: sin la lista de feriados no se calculan vencimientos,',\n      'para no marcar como vencida una factura que todavía está en plazo.',\n      'Acción sugerida: volver a ejecutar el workflow más tarde.',\n    ].join('\\n'),\n    tipoError: 'api_feriados_caida',\n  },\n}];"
+      }
+    },
+    {
+      "id": "d0d20582-91d9-3cc2-0368-fd57ef1f9319",
+      "name": "¿JSON Server respondió?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b04d75a7-3a0e-8fff-8792-db4fd66c0b24",
+              "leftValue": "={{ $json.statusCode === 200 && Array.isArray($json.body) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1909e99c-cd49-9a57-3fac-e4c9be8815c6",
+      "name": "GET historial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        100
+      ],
+      "parameters": {
+        "url": "={{ $('Configuración').first().json.jsonServer }}/historial?_sort=ejecutadoEn&_order=desc&_limit=5",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d1786bfa-6fc9-d44e-1afa-85d2700d3534",
+      "name": "Alerta: JSON Server caído",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// ERROR 2: JSON Server no respondió (apagado o URL incorrecta).\nconst config = $('Configuración').first().json;\nconst r = $input.first().json;\nconst motivo = r.error\n  ? (r.error.message || String(r.error))\n  : `Estado HTTP ${r.statusCode}`;\nreturn [{\n  json: {\n    asunto: `⚠ Facturación detenida ${config.hoy}: JSON Server no responde`,\n    cuerpo: [\n      `No se pudieron leer las facturas desde ${config.jsonServer}.`,\n      '',\n      `Motivo técnico: ${motivo}`,\n      '',\n      'Acción sugerida: verificar que JSON Server esté encendido (npm run api) y volver a ejecutar.',\n    ].join('\\n'),\n    tipoError: 'json_server_caido',\n  },\n}];"
+      }
+    },
+    {
+      "id": "6940007f-9a2f-b872-d770-262004d7a67c",
+      "name": "Enviar alerta técnica",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2000,
+        460
+      ],
+      "parameters": {
+        "fromEmail": "={{ $('Configuración').first().json.correoRemitente }}",
+        "toEmail": "={{ $('Configuración').first().json.correoAlertas }}",
+        "subject": "={{ $json.asunto }}",
+        "emailFormat": "text",
+        "text": "={{ $json.cuerpo }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "03533d25-4f23-a494-f8ab-042e04425db4",
+      "name": "Evaluar facturas (POO)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// ⚠ CÓDIGO GENERADO por scripts/build-workflow.js a partir de /src.\n// Si cambias una regla de negocio, cámbiala en /src y vuelve a ejecutar: npm run build:n8n\n\n// ===== Clase CalendarioLaboral (src/CalendarioLaboral.js) =====\n/**\n * CalendarioLaboral\n * -----------------\n * Responsabilidad: saber qué días son hábiles en Costa Rica.\n * Un día hábil NO es sábado, NO es domingo y NO es feriado.\n *\n * Analogía: es como el \"calendario de pared\" de la oficina de cobros,\n * donde alguien marcó en rojo los feriados. Las facturas le preguntan\n * a este calendario \"¿cuál es el día hábil número 15 a partir de aquí?\".\n *\n * Decisión técnica: todas las fechas se manejan como texto 'YYYY-MM-DD'\n * y los cálculos se hacen en UTC. Así evitamos que la zona horaria\n * (Costa Rica es UTC-6) \"corra\" una fecha un día hacia atrás.\n */\nclass CalendarioLaboral {\n  /**\n   * @param {Array<string|{date:string, localName?:string, name?:string}>} feriados\n   *   Acepta fechas sueltas ('2026-09-15') o el formato de la API Nager.Date\n   *   ({ date: '2026-09-15', localName: 'Día de la Independencia' }).\n   */\n  constructor(feriados = []) {\n    this.feriados = new Map();\n    const lista = Array.isArray(feriados) ? feriados : [];\n    for (const feriado of lista) {\n      const fecha = typeof feriado === 'string' ? feriado : feriado && feriado.date;\n      if (CalendarioLaboral.esFechaValida(fecha)) {\n        const nombre = typeof feriado === 'string'\n          ? 'Feriado'\n          : (feriado.localName || feriado.name || 'Feriado');\n        this.feriados.set(fecha, nombre);\n      }\n    }\n  }\n\n  // ---------- Utilidades de fechas (métodos estáticos) ----------\n\n  /** ¿El texto es una fecha real con formato YYYY-MM-DD? (rechaza '2026-02-30') */\n  static esFechaValida(texto) {\n    if (typeof texto !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(texto)) return false;\n    const fecha = CalendarioLaboral.aFecha(texto);\n    return CalendarioLaboral.aTexto(fecha) === texto;\n  }\n\n  /** '2026-09-15' -> objeto Date en UTC */\n  static aFecha(texto) {\n    const [anio, mes, dia] = texto.split('-').map(Number);\n    return new Date(Date.UTC(anio, mes - 1, dia));\n  }\n\n  /** objeto Date -> '2026-09-15' */\n  static aTexto(fecha) {\n    return fecha.toISOString().slice(0, 10);\n  }\n\n  /** Suma días de calendario (incluye fines de semana y feriados). */\n  static sumarDias(texto, cantidad) {\n    const fecha = CalendarioLaboral.aFecha(texto);\n    fecha.setUTCDate(fecha.getUTCDate() + cantidad);\n    return CalendarioLaboral.aTexto(fecha);\n  }\n\n  // ---------- Reglas del calendario ----------\n\n  cantidadFeriados() {\n    return this.feriados.size;\n  }\n\n  esFinDeSemana(fecha) {\n    const dia = CalendarioLaboral.aFecha(fecha).getUTCDay(); // 0 = domingo, 6 = sábado\n    return dia === 0 || dia === 6;\n  }\n\n  esFeriado(fecha) {\n    return this.feriados.has(fecha);\n  }\n\n  nombreFeriado(fecha) {\n    return this.feriados.get(fecha) || null;\n  }\n\n  /** REGLA: un día hábil no es fin de semana ni feriado. */\n  esDiaHabil(fecha) {\n    return !this.esFinDeSemana(fecha) && !this.esFeriado(fecha);\n  }\n\n  /**\n   * Devuelve la fecha que cae `cantidad` días hábiles DESPUÉS de `desde`.\n   * El día de inicio no cuenta (igual que un plazo legal: se empieza a contar al día siguiente).\n   */\n  sumarDiasHabiles(desde, cantidad) {\n    if (!CalendarioLaboral.esFechaValida(desde)) {\n      throw new Error(`Fecha de inicio inválida: ${desde}`);\n    }\n    if (!Number.isInteger(cantidad) || cantidad < 0) {\n      throw new Error(`La cantidad de días hábiles debe ser un entero positivo (recibido: ${cantidad})`);\n    }\n    let fecha = desde;\n    let contados = 0;\n    while (contados < cantidad) {\n      fecha = CalendarioLaboral.sumarDias(fecha, 1);\n      if (this.esDiaHabil(fecha)) contados++;\n    }\n    return fecha;\n  }\n\n  /**\n   * Cuenta los días hábiles entre dos fechas (sin contar `desde`, contando `hasta`).\n   * Si `hasta` es anterior a `desde`, el resultado es negativo (ya pasó).\n   */\n  diasHabilesEntre(desde, hasta) {\n    if (desde === hasta) return 0;\n    const signo = hasta > desde ? 1 : -1;\n    const inicio = signo === 1 ? desde : hasta;\n    const fin = signo === 1 ? hasta : desde;\n    let fecha = inicio;\n    let cuenta = 0;\n    while (fecha < fin) {\n      fecha = CalendarioLaboral.sumarDias(fecha, 1);\n      if (this.esDiaHabil(fecha)) cuenta++;\n    }\n    return cuenta * signo;\n  }\n}\n\n// ===== Clase HistorialTendencia (src/HistorialTendencia.js) =====\n/**\n * HistorialTendencia\n * ------------------\n * Responsabilidad: mirar las ejecuciones anteriores del workflow\n * (guardadas en la colección \"historial\" de JSON Server) y decidir si\n * la morosidad va MEJORANDO, EMPEORANDO o se mantiene ESTABLE.\n *\n * Analogía: es como comparar tus notas de los últimos parciales.\n * No basta con ver la nota de hoy; importa si vienes subiendo o bajando.\n *\n * Regla: se compara la tasa de morosidad de hoy contra el PROMEDIO de las\n * últimas ejecuciones. Una diferencia menor al margen se considera \"estable\"\n * (para no alarmar por cambios mínimos).\n */\nclass HistorialTendencia {\n  static MARGEN_PUNTOS = 2;       // diferencia mínima (en puntos %) para hablar de cambio\n  static EJECUCIONES_A_COMPARAR = 3;\n\n  constructor(registros = []) {\n    const lista = Array.isArray(registros) ? registros : [];\n    // Solo se usan registros con una tasa numérica; se ordenan del más reciente al más antiguo.\n    this.registros = lista\n      .filter((r) => r && typeof r.tasaMorosidad === 'number' && Number.isFinite(r.tasaMorosidad))\n      .sort((a, b) => String(b.ejecutadoEn || b.fecha).localeCompare(String(a.ejecutadoEn || a.fecha)));\n  }\n\n  cantidad() {\n    return this.registros.length;\n  }\n\n  /** Último tipo de cambio válido guardado (respaldo si la API de tipo de cambio falla). */\n  ultimoTipoCambio() {\n    const registro = this.registros.find((r) => typeof r.tipoCambio === 'number' && r.tipoCambio > 0);\n    return registro ? registro.tipoCambio : null;\n  }\n\n  promedioReciente() {\n    const recientes = this.registros.slice(0, HistorialTendencia.EJECUCIONES_A_COMPARAR);\n    if (recientes.length === 0) return null;\n    const suma = recientes.reduce((total, r) => total + r.tasaMorosidad, 0);\n    return Math.round((suma / recientes.length) * 100) / 100;\n  }\n\n  /**\n   * @param {number} tasaActual tasa de morosidad (%) de la ejecución actual\n   * @returns {{tendencia: string, promedioAnterior: number|null, diferencia: number|null, mensaje: string}}\n   */\n  calcularTendencia(tasaActual) {\n    const promedio = this.promedioReciente();\n    if (promedio === null) {\n      return {\n        tendencia: 'sin_datos',\n        promedioAnterior: null,\n        diferencia: null,\n        mensaje: 'Es la primera ejecución registrada; todavía no hay con qué comparar.',\n      };\n    }\n    const diferencia = Math.round((tasaActual - promedio) * 100) / 100;\n    let tendencia = 'estable';\n    if (diferencia >= HistorialTendencia.MARGEN_PUNTOS) tendencia = 'empeorando';\n    else if (diferencia <= -HistorialTendencia.MARGEN_PUNTOS) tendencia = 'mejorando';\n\n    const textos = {\n      empeorando: `La morosidad subió ${diferencia} puntos respecto al promedio reciente (${promedio}%).`,\n      mejorando: `La morosidad bajó ${Math.abs(diferencia)} puntos respecto al promedio reciente (${promedio}%).`,\n      estable: `La morosidad se mantiene cerca del promedio reciente (${promedio}%).`,\n    };\n    return { tendencia, promedioAnterior: promedio, diferencia, mensaje: textos[tendencia] };\n  }\n}\n\n// ===== Clase Factura (src/Factura.js) =====\n/**\n * Factura (clase base)\n * --------------------\n * Responsabilidad: guardar los datos de una factura y aplicar las reglas\n * que son IGUALES para cualquier tipo de factura (validar datos, saber si\n * está vencida, convertir el monto a colones, decidir si es crítica).\n *\n * Lo que CAMBIA según el tipo de factura es el plazo de pago. Por eso\n * `calcularFechaVencimiento()` está aquí vacío y cada clase hija\n * (FacturaCredito, FacturaContado) lo sobreescribe a su manera.\n *\n * Analogía: Factura es como el \"molde general\" de un formulario de cobro.\n * Todas las copias tienen los mismos campos, pero cada departamento\n * (crédito o contado) llena distinto la casilla de \"fecha límite\".\n */\nclass Factura {\n  static ESTADOS = ['pendiente', 'vencida', 'pagada', 'revision'];\n  static MONEDAS = ['CRC', 'USD'];\n\n  constructor(datos = {}) {\n    if (new.target === Factura) {\n      throw new Error('Factura es una clase base: crea una FacturaCredito o una FacturaContado');\n    }\n    this.id = datos.id;\n    this.cliente = datos.cliente;\n    this.correoCliente = datos.correoCliente || null;\n    this.monto = datos.monto;\n    this.moneda = datos.moneda || 'CRC';\n    this.fechaEmision = datos.fechaEmision;\n    this.estado = datos.estado || 'pendiente';\n  }\n\n  /** Cada clase hija dice qué tipo es ('credito' o 'contado'). */\n  get tipo() {\n    throw new Error('Cada clase hija debe definir su tipo');\n  }\n\n  /** POLIMORFISMO: cada clase hija calcula su vencimiento de forma distinta. */\n  calcularFechaVencimiento(calendario) { // eslint-disable-line no-unused-vars\n    throw new Error('Cada clase hija debe implementar calcularFechaVencimiento()');\n  }\n\n  /** POLIMORFISMO: cada clase hija describe su plazo con sus propias palabras. */\n  describirPlazo() {\n    throw new Error('Cada clase hija debe implementar describirPlazo()');\n  }\n\n  /**\n   * REGLA: una factura con datos incompletos o imposibles no se procesa,\n   * se manda a \"revision\" con el motivo. Devuelve la lista de problemas\n   * (vacía si todo está bien).\n   */\n  validar(hoy) {\n    const errores = [];\n    if (this.id === undefined || this.id === null || this.id === '') {\n      errores.push('No tiene identificador');\n    }\n    if (typeof this.cliente !== 'string' || this.cliente.trim() === '') {\n      errores.push('No tiene cliente');\n    }\n    if (typeof this.monto !== 'number' || !Number.isFinite(this.monto) || this.monto <= 0) {\n      errores.push(`Monto inválido (${this.monto})`);\n    }\n    if (!Factura.MONEDAS.includes(this.moneda)) {\n      errores.push(`Moneda no soportada (${this.moneda})`);\n    }\n    if (!CalendarioLaboral.esFechaValida(this.fechaEmision)) {\n      errores.push(`Fecha de emisión inválida o faltante (${this.fechaEmision})`);\n    } else if (hoy && this.fechaEmision > hoy) {\n      errores.push(`Fecha de emisión en el futuro (${this.fechaEmision})`);\n    }\n    if (!Factura.ESTADOS.includes(this.estado)) {\n      errores.push(`Estado desconocido (${this.estado})`);\n    }\n    return errores;\n  }\n\n  /**\n   * Días hábiles que faltan para el vencimiento.\n   * Positivo = todavía hay tiempo; 0 = vence hoy; negativo = ya se pasó.\n   */\n  diasHabilesRestantes(hoy, calendario) {\n    return calendario.diasHabilesEntre(hoy, this.calcularFechaVencimiento(calendario));\n  }\n\n  /** REGLA: vencida si hoy ya pasó la fecha límite y no está pagada. */\n  estaVencida(hoy, calendario) {\n    if (this.estado === 'pagada') return false;\n    return hoy > this.calcularFechaVencimiento(calendario);\n  }\n\n  /** REGLA: \"por vencer\" si le quedan pocos días hábiles (alerta preventiva). */\n  estaPorVencer(hoy, calendario, umbralDias = 3) {\n    if (this.estado === 'pagada' || this.estaVencida(hoy, calendario)) return false;\n    return this.diasHabilesRestantes(hoy, calendario) <= umbralDias;\n  }\n\n  /**\n   * REGLA: los montos en dólares se convierten a colones con el tipo de cambio del día.\n   * Si no hay tipo de cambio disponible, devuelve null (no se inventa un número).\n   */\n  montoEnColones(tipoCambio) {\n    if (this.moneda === 'CRC') return this.monto;\n    if (typeof tipoCambio !== 'number' || !(tipoCambio > 0)) return null;\n    return Math.round(this.monto * tipoCambio * 100) / 100;\n  }\n\n  /** REGLA: una factura vencida por encima del monto crítico requiere aviso inmediato. */\n  esCritica(hoy, calendario, tipoCambio, montoCriticoCRC) {\n    const montoCRC = this.montoEnColones(tipoCambio);\n    return this.estaVencida(hoy, calendario) && montoCRC !== null && montoCRC >= montoCriticoCRC;\n  }\n\n  /**\n   * Junta todas las reglas en una sola \"decisión\" para esta factura.\n   * Nota: este método vive en la clase base, pero llama a\n   * calcularFechaVencimiento(), que es distinto en cada hija (polimorfismo).\n   */\n  evaluar(hoy, calendario, { tipoCambio = null, umbralDiasRiesgo = 3, montoCriticoCRC = 1000000 } = {}) {\n    const fechaVencimiento = this.calcularFechaVencimiento(calendario);\n    const vencida = this.estaVencida(hoy, calendario);\n    const porVencer = this.estaPorVencer(hoy, calendario, umbralDiasRiesgo);\n    let alerta = null;\n    if (vencida) alerta = 'vencida';\n    else if (porVencer) alerta = 'por_vencer';\n\n    return {\n      id: this.id,\n      cliente: this.cliente,\n      tipo: this.tipo,\n      plazo: this.describirPlazo(),\n      estadoAnterior: this.estado,\n      estadoNuevo: vencida ? 'vencida' : 'pendiente',\n      fechaVencimiento,\n      diasHabilesRestantes: this.diasHabilesRestantes(hoy, calendario),\n      montoCRC: this.montoEnColones(tipoCambio),\n      alerta,\n      critica: this.esCritica(hoy, calendario, tipoCambio, montoCriticoCRC),\n    };\n  }\n}\n\n// ===== Clase FacturaCredito (src/FacturaCredito.js) =====\n/**\n * FacturaCredito (hija de Factura)\n * --------------------------------\n * Regla propia: el cliente tiene un plazo de crédito en DÍAS HÁBILES\n * (15 por defecto) contados desde la fecha de emisión.\n * Algunos clientes pueden tener otro plazo (campo `diasCredito`), entre 1 y 90.\n */\nclass FacturaCredito extends Factura {\n  static DIAS_CREDITO_POR_DEFECTO = 15;\n  static DIAS_CREDITO_MAXIMO = 90;\n\n  constructor(datos = {}) {\n    super(datos);\n    this.diasCredito = datos.diasCredito === undefined || datos.diasCredito === null\n      ? FacturaCredito.DIAS_CREDITO_POR_DEFECTO\n      : datos.diasCredito;\n  }\n\n  get tipo() {\n    return 'credito';\n  }\n\n  /** Sobreescribe la validación: además de lo común, revisa el plazo de crédito. */\n  validar(hoy) {\n    const errores = super.validar(hoy);\n    if (!Number.isInteger(this.diasCredito) || this.diasCredito < 1 || this.diasCredito > FacturaCredito.DIAS_CREDITO_MAXIMO) {\n      errores.push(`Plazo de crédito inválido (${this.diasCredito}); debe ser entre 1 y ${FacturaCredito.DIAS_CREDITO_MAXIMO} días hábiles`);\n    }\n    return errores;\n  }\n\n  /** POLIMORFISMO: crédito = N días hábiles después de emitida. */\n  calcularFechaVencimiento(calendario) {\n    return calendario.sumarDiasHabiles(this.fechaEmision, this.diasCredito);\n  }\n\n  describirPlazo() {\n    return `Crédito a ${this.diasCredito} días hábiles`;\n  }\n}\n\n// ===== Clase FacturaContado (src/FacturaContado.js) =====\n/**\n * FacturaContado (hija de Factura)\n * --------------------------------\n * Regla propia: una venta de contado debe quedar pagada a más tardar\n * el SIGUIENTE DÍA HÁBIL después de emitida (por ejemplo, si se emitió\n * un viernes, el plazo llega hasta el lunes; si el lunes es feriado, el martes).\n */\nclass FacturaContado extends Factura {\n  static DIAS_PLAZO = 1;\n\n  get tipo() {\n    return 'contado';\n  }\n\n  /** POLIMORFISMO: contado = el siguiente día hábil. */\n  calcularFechaVencimiento(calendario) {\n    return calendario.sumarDiasHabiles(this.fechaEmision, FacturaContado.DIAS_PLAZO);\n  }\n\n  describirPlazo() {\n    return 'Contado: se paga el siguiente día hábil';\n  }\n}\n\n// ===== Clase ProcesadorFacturas (src/ProcesadorFacturas.js) =====\n/**\n * ProcesadorFacturas\n * ------------------\n * Responsabilidad: coordinar a las demás clases. Recibe los datos \"crudos\"\n * (facturas de JSON Server, feriados de Nager.Date, tipo de cambio e historial),\n * crea los objetos correctos y produce UNA decisión para el workflow:\n *   - qué cambios hay que guardar en cada factura,\n *   - el resumen de la ejecución (para el historial),\n *   - la tendencia,\n *   - y el correo de alerta si hay una situación crítica.\n *\n * Esta es la MISMA clase que corre dentro del nodo Code de n8n\n * (\"Evaluar facturas (POO)\"). El script scripts/build-workflow.js copia\n * estas clases al nodo, así nunca existen dos lógicas distintas.\n *\n * Analogía: es el \"jefe de cobros\". No calcula fechas él mismo; le pide a cada\n * factura que se evalúe y al calendario que cuente días, y luego arma el informe.\n */\nclass ProcesadorFacturas {\n  constructor({\n    feriados,\n    tipoCambio = null,\n    hoy,\n    umbralDiasRiesgo = 3,\n    montoCriticoCRC = 1000000,\n    ejecutadoEn = new Date().toISOString(),\n  } = {}) {\n    if (!CalendarioLaboral.esFechaValida(hoy)) {\n      throw new Error(`La fecha de hoy es inválida: ${hoy}`);\n    }\n    // REGLA DE SEGURIDAD: sin feriados no se calcula nada. Calcular \"a ciegas\"\n    // podría marcar como vencida una factura que todavía está en plazo.\n    const calendario = new CalendarioLaboral(feriados);\n    if (calendario.cantidadFeriados() === 0) {\n      throw new Error('No se recibieron feriados válidos; no es seguro calcular vencimientos.');\n    }\n    this.calendario = calendario;\n    this.tipoCambio = typeof tipoCambio === 'number' && tipoCambio > 0 ? tipoCambio : null;\n    this.hoy = hoy;\n    this.umbralDiasRiesgo = umbralDiasRiesgo;\n    this.montoCriticoCRC = montoCriticoCRC;\n    this.ejecutadoEn = ejecutadoEn;\n  }\n\n  /** Fábrica: según el campo \"tipo\" crea la clase hija correcta (o null si no existe). */\n  static crearFactura(datos) {\n    if (!datos || typeof datos !== 'object') return null;\n    if (datos.tipo === 'credito') return new FacturaCredito(datos);\n    if (datos.tipo === 'contado') return new FacturaContado(datos);\n    return null;\n  }\n\n  /**\n   * @param {Array<object>} facturasJSON facturas no pagadas (JSON Server)\n   * @param {Array<object>} historialJSON últimas ejecuciones guardadas (JSON Server)\n   */\n  procesar(facturasJSON = [], historialJSON = []) {\n    const historial = new HistorialTendencia(historialJSON);\n\n    // REGLA: si la API de tipo de cambio falló, se usa el último tipo de cambio del historial.\n    let tipoCambio = this.tipoCambio;\n    let fuenteTipoCambio = 'API open.er-api.com';\n    if (tipoCambio === null) {\n      tipoCambio = historial.ultimoTipoCambio();\n      fuenteTipoCambio = tipoCambio !== null ? 'último valor del historial (API no disponible)' : 'no disponible';\n    }\n\n    const opciones = { tipoCambio, umbralDiasRiesgo: this.umbralDiasRiesgo, montoCriticoCRC: this.montoCriticoCRC };\n    const actualizaciones = [];\n    const evaluadas = [];\n    const enRevision = [];\n\n    for (const datos of Array.isArray(facturasJSON) ? facturasJSON : []) {\n      const id = datos && datos.id !== undefined ? datos.id : null;\n      const estadoAnterior = (datos && datos.estado) || 'pendiente';\n      if (estadoAnterior === 'pagada') continue; // REGLA: una factura pagada nunca se toca.\n\n      const factura = ProcesadorFacturas.crearFactura(datos);\n      const errores = factura\n        ? factura.validar(this.hoy)\n        : [`Tipo de factura desconocido (${datos && datos.tipo})`];\n\n      if (errores.length > 0) {\n        enRevision.push({ id, cliente: (datos && datos.cliente) || '(sin cliente)', estadoAnterior, motivo: errores.join('; ') });\n        if (id !== null) {\n          actualizaciones.push({\n            id,\n            cambios: { estado: 'revision', motivoRevision: errores.join('; '), alerta: 'datos_incompletos', ultimaRevision: this.hoy },\n          });\n        }\n        continue;\n      }\n\n      const decision = factura.evaluar(this.hoy, this.calendario, opciones);\n      evaluadas.push(decision);\n      actualizaciones.push({\n        id: decision.id,\n        cambios: {\n          estado: decision.estadoNuevo,\n          fechaVencimiento: decision.fechaVencimiento,\n          diasHabilesRestantes: decision.diasHabilesRestantes,\n          montoCRC: decision.montoCRC,\n          alerta: decision.alerta,\n          motivoRevision: null,\n          ultimaRevision: this.hoy,\n        },\n      });\n    }\n\n    const vencidas = evaluadas.filter((d) => d.estadoNuevo === 'vencida');\n    const vencidasNuevas = vencidas.filter((d) => d.estadoAnterior !== 'vencida');\n    const porVencer = evaluadas.filter((d) => d.alerta === 'por_vencer');\n    const criticas = evaluadas.filter((d) => d.critica);\n    const revisionNuevas = enRevision.filter((r) => r.estadoAnterior !== 'revision');\n\n    const tasaMorosidad = evaluadas.length === 0\n      ? 0\n      : Math.round((vencidas.length / evaluadas.length) * 10000) / 100;\n    const montoVencidoCRC = Math.round(\n      vencidas.reduce((total, d) => total + (d.montoCRC || 0), 0) * 100,\n    ) / 100;\n    const vencidasSinConvertir = vencidas.filter((d) => d.montoCRC === null).length;\n\n    const tendencia = historial.calcularTendencia(tasaMorosidad);\n\n    const resumen = {\n      fecha: this.hoy,\n      ejecutadoEn: this.ejecutadoEn,\n      totalRecibidas: evaluadas.length + enRevision.length,\n      totalEvaluadas: evaluadas.length,\n      vencidas: vencidas.length,\n      vencidasNuevas: vencidasNuevas.length,\n      porVencer: porVencer.length,\n      enRevision: enRevision.length,\n      criticas: criticas.length,\n      tasaMorosidad,\n      montoVencidoCRC,\n      vencidasSinConvertir,\n      tipoCambio,\n      fuenteTipoCambio,\n      tendencia: tendencia.tendencia,\n    };\n\n    // REGLA: se avisa por correo si aparecen vencidas nuevas, datos malos nuevos o la morosidad empeora.\n    const hayAlerta = vencidasNuevas.length > 0 || revisionNuevas.length > 0 || tendencia.tendencia === 'empeorando';\n\n    return {\n      resumen,\n      tendencia,\n      actualizaciones,\n      detalle: { vencidas, porVencer, criticas, enRevision },\n      hayAlerta,\n      correo: this.redactarCorreo(resumen, tendencia, { vencidasNuevas, criticas, porVencer, enRevision }),\n      registroHistorial: resumen,\n    };\n  }\n\n  redactarCorreo(resumen, tendencia, { vencidasNuevas, criticas, porVencer, enRevision }) {\n    const colones = (n) => (n === null ? 'sin convertir' : `₡${Number(n).toLocaleString('es-CR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);\n    const lineas = [];\n    lineas.push(`Reporte de facturación — ${resumen.fecha}`);\n    lineas.push('');\n    lineas.push(`Facturas evaluadas: ${resumen.totalEvaluadas}`);\n    lineas.push(`Vencidas: ${resumen.vencidas} (nuevas hoy: ${resumen.vencidasNuevas})`);\n    lineas.push(`Por vencer (≤ ${this.umbralDiasRiesgo} días hábiles): ${resumen.porVencer}`);\n    lineas.push(`En revisión por datos incompletos: ${resumen.enRevision}`);\n    lineas.push(`Monto vencido: ${colones(resumen.montoVencidoCRC)}`);\n    lineas.push(`Tipo de cambio usado: ${resumen.tipoCambio ?? 'no disponible'} (${resumen.fuenteTipoCambio})`);\n    lineas.push(`Tasa de morosidad: ${resumen.tasaMorosidad}% — tendencia: ${tendencia.tendencia.toUpperCase()}`);\n    lineas.push(tendencia.mensaje);\n\n    if (criticas.length > 0) {\n      lineas.push('', `⚠ FACTURAS CRÍTICAS (vencidas ≥ ${colones(this.montoCriticoCRC)}):`);\n      criticas.forEach((d) => lineas.push(`  - ${d.id} | ${d.cliente} | ${colones(d.montoCRC)} | venció ${d.fechaVencimiento}`));\n    }\n    if (vencidasNuevas.length > 0) {\n      lineas.push('', 'Vencidas nuevas:');\n      vencidasNuevas.forEach((d) => lineas.push(`  - ${d.id} | ${d.cliente} | ${d.plazo} | venció ${d.fechaVencimiento}`));\n    }\n    if (porVencer.length > 0) {\n      lineas.push('', 'Por vencer pronto:');\n      porVencer.forEach((d) => lineas.push(`  - ${d.id} | ${d.cliente} | vence ${d.fechaVencimiento} (${d.diasHabilesRestantes} días hábiles)`));\n    }\n    if (enRevision.length > 0) {\n      lineas.push('', 'Requieren revisión manual:');\n      enRevision.forEach((r) => lineas.push(`  - ${r.id ?? '(sin id)'} | ${r.cliente} | ${r.motivo}`));\n    }\n\n    const asunto = criticas.length > 0\n      ? `⚠ ${criticas.length} factura(s) crítica(s) vencida(s) — ${resumen.fecha}`\n      : `Reporte de facturación ${resumen.fecha}: ${resumen.vencidasNuevas} vencida(s) nueva(s), tendencia ${tendencia.tendencia}`;\n\n    return { asunto, cuerpo: lineas.join('\\n') };\n  }\n}\n\n// =====================================================================\n// Parte final del nodo Code \"Evaluar facturas (POO)\".\n// Arriba de este bloque, scripts/build-workflow.js pega las clases de /src\n// (CalendarioLaboral, HistorialTendencia, Factura, FacturaCredito,\n// FacturaContado, ProcesadorFacturas) SIN cambios. Aquí solo se conectan\n// los datos que vienen de los nodos anteriores con esas clases.\n// =====================================================================\n\nconst config = $('Configuración').first().json;\nconst fuentes = $('Combinar fuentes externas').first().json;\nconst respuestaFacturas = $('GET facturas no pagadas').first().json;\nconst respuestaHistorial = $input.first().json;\n\n// Si el historial no responde, se continúa sin él (la tendencia queda \"sin_datos\").\nconst historial = respuestaHistorial.statusCode === 200 && Array.isArray(respuestaHistorial.body)\n  ? respuestaHistorial.body\n  : [];\n\nconst procesador = new ProcesadorFacturas({\n  feriados: fuentes.feriados,\n  tipoCambio: fuentes.tipoCambio,\n  hoy: config.hoy,\n  umbralDiasRiesgo: config.umbralDiasRiesgo,\n  montoCriticoCRC: config.montoCriticoCRC,\n});\n\nconst resultado = procesador.procesar(respuestaFacturas.body, historial);\n\nreturn [{ json: resultado }];\n"
+      }
+    },
+    {
+      "id": "8d1e7e09-eaab-e2fa-7b97-068b724c4c0c",
+      "name": "Separar actualizaciones",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        -20
+      ],
+      "parameters": {
+        "fieldToSplitOut": "actualizaciones",
+        "options": {}
+      }
+    },
+    {
+      "id": "e412f12a-94d9-6845-c2ef-1491d8a6f493",
+      "name": "PATCH factura (JSON Server)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        -20
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Configuración').first().json.jsonServer }}/facturas/{{ $json.id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.cambios) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "47ed7479-ce02-cb19-a0d9-16466cb77dbb",
+      "name": "POST historial (JSON Server)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Configuración').first().json.jsonServer }}/historial",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.registroHistorial) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a97c967f-0ea1-fc2b-0aa1-9a9d9c52c3f3",
+      "name": "¿Situación crítica?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "51934d52-5b87-34a4-13a1-647678c127bc",
+              "leftValue": "={{ $('Evaluar facturas (POO)').first().json.hayAlerta }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8e2d9f1e-d88a-60f7-bb8a-34eefd0a157c",
+      "name": "Enviar reporte por correo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2660,
+        120
+      ],
+      "parameters": {
+        "fromEmail": "={{ $('Configuración').first().json.correoRemitente }}",
+        "toEmail": "={{ $('Configuración').first().json.correoAlertas }}",
+        "subject": "={{ $('Evaluar facturas (POO)').first().json.correo.asunto }}",
+        "emailFormat": "text",
+        "text": "={{ $('Evaluar facturas (POO)').first().json.correo.cuerpo }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d3a305c3-2bcf-fcbc-d349-d5ff3e675205",
+      "name": "Sin novedades",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2660,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "5c0eacd9-ab69-d3b9-c21b-242c56641e0c",
+      "name": "Nota: fuentes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        380,
+        -60
+      ],
+      "parameters": {
+        "width": 520,
+        "height": 200,
+        "color": 4,
+        "content": "## 1. Fuentes externas (Reto 2)\nFeriados de Costa Rica (Nager.Date) y tipo de cambio USD→CRC (open.er-api.com) se piden en paralelo y se **combinan con Merge**.\nSi el tipo de cambio falla, se usa el último guardado en el historial."
+      }
+    },
+    {
+      "id": "d11ef54c-ce63-ac2d-8fcd-609b9ee0bed5",
+      "name": "Nota: errores",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        640
+      ],
+      "parameters": {
+        "width": 700,
+        "height": 160,
+        "color": 3,
+        "content": "## Manejo de errores\n**Error 1:** la API de feriados no responde → no se procesa nada (regla de seguridad) y se envía alerta.\n**Error 2:** JSON Server apagado → alerta técnica.\n**Error 3:** factura con datos incompletos → pasa a estado \"revision\" con el motivo (lo decide la clase Factura)."
+      }
+    },
+    {
+      "id": "dce759d0-a106-a2c0-d385-c534532d79dc",
+      "name": "Nota: POO",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        -260
+      ],
+      "parameters": {
+        "width": 760,
+        "height": 200,
+        "color": 5,
+        "content": "## 2. Lógica de negocio con clases (Reto 1 y Reto 4)\nEl nodo **Evaluar facturas (POO)** contiene las mismas clases de /src: Factura → FacturaCredito / FacturaContado (polimorfismo en calcularFechaVencimiento), CalendarioLaboral, HistorialTendencia y ProcesadorFacturas.\nLuego se actualiza cada factura (PATCH), se guarda la ejecución en el historial (POST) y, si hay situación crítica, se envía correo (Reto 3)."
+      }
+    }
+  ],
+  "connections": {
+    "Cada día 7:00 a.m.": {
+      "main": [
+        [
+          {
+            "node": "Configuración",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuración": {
+      "main": [
+        [
+          {
+            "node": "API Feriados (Nager.Date)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "API Tipo de cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Feriados (Nager.Date)": {
+      "main": [
+        [
+          {
+            "node": "Preparar feriados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Tipo de cambio": {
+      "main": [
+        [
+          {
+            "node": "Preparar tipo de cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar feriados": {
+      "main": [
+        [
+          {
+            "type": "main",
+            "node": "Combinar fuentes externas",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar tipo de cambio": {
+      "main": [
+        [
+          {
+            "type": "main",
+            "node": "Combinar fuentes externas",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combinar fuentes externas": {
+      "main": [
+        [
+          {
+            "node": "¿Hay feriados?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay feriados?": {
+      "main": [
+        [
+          {
+            "node": "GET facturas no pagadas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alerta: API de feriados caída",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerta: API de feriados caída": {
+      "main": [
+        [
+          {
+            "node": "Enviar alerta técnica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET facturas no pagadas": {
+      "main": [
+        [
+          {
+            "node": "¿JSON Server respondió?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿JSON Server respondió?": {
+      "main": [
+        [
+          {
+            "node": "GET historial",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alerta: JSON Server caído",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerta: JSON Server caído": {
+      "main": [
+        [
+          {
+            "node": "Enviar alerta técnica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET historial": {
+      "main": [
+        [
+          {
+            "node": "Evaluar facturas (POO)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar facturas (POO)": {
+      "main": [
+        [
+          {
+            "node": "Separar actualizaciones",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "POST historial (JSON Server)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar actualizaciones": {
+      "main": [
+        [
+          {
+            "node": "PATCH factura (JSON Server)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST historial (JSON Server)": {
+      "main": [
+        [
+          {
+            "node": "¿Situación crítica?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Situación crítica?": {
+      "main": [
+        [
+          {
+            "node": "Enviar reporte por correo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sin novedades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -1,0 +1,14 @@
+[
+  { "date": "2026-01-01", "localName": "Año Nuevo", "name": "New Year's Day", "countryCode": "CR" },
+  { "date": "2026-04-02", "localName": "Jueves Santo", "name": "Maundy Thursday", "countryCode": "CR" },
+  { "date": "2026-04-03", "localName": "Viernes Santo", "name": "Good Friday", "countryCode": "CR" },
+  { "date": "2026-04-11", "localName": "Día de Juan Santamaría", "name": "Juan Santamaría Day", "countryCode": "CR" },
+  { "date": "2026-05-01", "localName": "Día Internacional del Trabajo", "name": "Labour Day", "countryCode": "CR" },
+  { "date": "2026-07-25", "localName": "Anexión del Partido de Nicoya", "name": "Guanacaste Day", "countryCode": "CR" },
+  { "date": "2026-08-02", "localName": "Virgen de los Ángeles", "name": "Our Lady of the Angels Day", "countryCode": "CR" },
+  { "date": "2026-08-15", "localName": "Día de la Madre", "name": "Mother's Day", "countryCode": "CR" },
+  { "date": "2026-08-31", "localName": "Día de la Persona Negra y la Cultura Afrocostarricense", "name": "Day of the Black Person and Afro-Costa Rican Culture", "countryCode": "CR" },
+  { "date": "2026-09-15", "localName": "Día de la Independencia", "name": "Independence Day", "countryCode": "CR" },
+  { "date": "2026-12-01", "localName": "Día de la Abolición del Ejército", "name": "Army Abolition Day", "countryCode": "CR" },
+  { "date": "2026-12-25", "localName": "Navidad", "name": "Christmas Day", "countryCode": "CR" }
+]

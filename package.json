@@ -1,0 +1,18 @@
+{
+  "name": "lab1-facturacion-poo-n8n",
+  "version": "1.0.0",
+  "description": "Laboratorio #1 POO + n8n: central de facturación con días hábiles (JavaScript puro + n8n + JSON Server)",
+  "main": "main.js",
+  "scripts": {
+    "api": "json-server --watch db.json --port 3000",
+    "start": "node main.js",
+    "test": "node --test",
+    "build:n8n": "node scripts/build-workflow.js",
+    "reset": "node scripts/reset-db.js"
+  },
+  "author": "Daisy",
+  "license": "MIT",
+  "devDependencies": {
+    "json-server": "0.17.4"
+  }
+}

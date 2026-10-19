@@ -1,0 +1,32 @@
+digraph G {
+  rankdir=TB; nodesep=0.35; ranksep=0.32; dpi=200;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#4a5568", fillcolor="#ffffff", margin="0.15,0.06"];
+  edge [fontname="Helvetica", fontsize=9, color="#4a5568"];
+  t [label="Schedule Trigger\n(cada día 7:00 a.m.)", fillcolor="#e9d8fd"];
+  c [label="Configuración\n(URL JSON Server, fecha de hoy, umbrales)"];
+  f [label="HTTP: API Feriados\n(Nager.Date)", fillcolor="#bee3f8"];
+  x [label="HTTP: API Tipo de cambio\n(open.er-api.com)", fillcolor="#bee3f8"];
+  pf [label="Code: Preparar feriados"]; px [label="Code: Preparar tipo de cambio"];
+  m [label="Merge: Combinar fuentes externas", fillcolor="#fefcbf"];
+  i1 [label="IF: ¿Hay feriados?", shape=diamond, style="filled", fillcolor="#fefcbf"];
+  g [label="HTTP GET facturas no pagadas\n(JSON Server)", fillcolor="#c6f6d5"];
+  i2 [label="IF: ¿JSON Server respondió?", shape=diamond, style="filled", fillcolor="#fefcbf"];
+  h [label="HTTP GET historial\n(JSON Server)", fillcolor="#c6f6d5"];
+  e [label="Code: Evaluar facturas (POO)\nCalendarioLaboral · Factura → Crédito / Contado\nHistorialTendencia · ProcesadorFacturas", fillcolor="#fbd38d", penwidth=2];
+  so [label="Split Out:\nSeparar actualizaciones"];
+  pa [label="HTTP PATCH factura\n(JSON Server)", fillcolor="#c6f6d5"];
+  po [label="HTTP POST historial\n(JSON Server)", fillcolor="#c6f6d5"];
+  i3 [label="IF: ¿Situación crítica?", shape=diamond, style="filled", fillcolor="#fefcbf"];
+  r [label="Correo: reporte\n(vencidas, críticas, tendencia)", fillcolor="#e9d8fd"];
+  n [label="Sin novedades"];
+  a1 [label="Code: Alerta\nAPI de feriados caída", fillcolor="#fed7d7"];
+  a2 [label="Code: Alerta\nJSON Server caído", fillcolor="#fed7d7"];
+  ae [label="Correo: alerta técnica", fillcolor="#fed7d7"];
+  t -> c; c -> f; c -> x; f -> pf; x -> px; pf -> m; px -> m; m -> i1;
+  i1 -> g [label="sí"]; i1 -> a1 [label="no", color="#c53030", fontcolor="#c53030"];
+  g -> i2; i2 -> h [label="sí"]; i2 -> a2 [label="no", color="#c53030", fontcolor="#c53030"];
+  h -> e; e -> so; so -> pa; e -> po; po -> i3;
+  i3 -> r [label="sí"]; i3 -> n [label="no"];
+  a1 -> ae; a2 -> ae;
+  {rank=same; f; x} {rank=same; pf; px} {rank=same; g; a1} {rank=same; so; po}
+}
